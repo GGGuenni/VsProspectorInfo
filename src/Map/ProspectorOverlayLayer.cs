@@ -12,6 +12,8 @@ using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
+using Vintagestory.API.Server;
+using Vintagestory.API.Util;
 using Vintagestory.GameContent;
 
 namespace ProspectorInfo.Map
@@ -29,6 +31,9 @@ namespace ProspectorInfo.Map
         private readonly ModConfig _config;
         private readonly LoadedTexture[] _colorTextures = new LoadedTexture[8];
         private bool _temporaryRenderOverride = false;
+
+        static private ICoreServerAPI _serverApi;
+        static private ProPickWorkSpace _proPickWorkSpace;
 
         public override string Title => "ProspectorOverlay";
         public override EnumMapAppSide DataSide => EnumMapAppSide.Client;
@@ -74,6 +79,17 @@ namespace ProspectorInfo.Map
                     _colorTextures[i]?.Dispose();
                     _colorTextures[i] = GenerateOverlayTexture((RelativeDensity)i);
                 }
+            }
+
+            if (api.Side == EnumAppSide.Server)
+            {
+                _serverApi = (ICoreServerAPI)api;
+                _proPickWorkSpace = ObjectCacheUtil.GetOrCreate(api, "propickworkspace", () =>
+                {
+                    ProPickWorkSpace ppws = new ProPickWorkSpace();
+                    ppws.OnLoaded(api);
+                    return ppws;
+                });
             }
         }
 
@@ -338,7 +354,7 @@ namespace ProspectorInfo.Map
             var posX = pos.X / _chunksize;
             var posZ = pos.Z / _chunksize;
             _messages.RemoveAll(m => m.X == posX && m.Z == posZ);
-            _messages.Add(new ProspectInfo(posX, posZ, message));
+            _messages.Add(new ProspectInfo(pos, _chunksize, _serverApi, _proPickWorkSpace));
             _clientApi.SaveDataFile(Filename, _messages);
 
             _components.RemoveAll(component =>
@@ -348,7 +364,10 @@ namespace ProspectorInfo.Map
             });
             RelativeDensity densityValue;
             if (_config.HeatMapOre == null)
-                densityValue = _messages.Last().Values.First().relativeDensity;
+                if (_messages.Last().Values != null && _messages.Last().Values.Count > 0)
+                    densityValue = _messages.Last().Values.First().relativeDensity;
+                else
+                    densityValue = RelativeDensity.Zero;
             else
                 densityValue = _messages.Last().GetValueOfOre(_config.HeatMapOre);
             var newComponent = new ProspectorOverlayMapComponent(_clientApi, posX, posZ, message, _colorTextures[(int)densityValue]);
@@ -387,10 +406,13 @@ namespace ProspectorInfo.Map
             {
                 RelativeDensity densityValue;
                 if (_config.HeatMapOre == null)
-                    densityValue = message.Values.First().relativeDensity;
+                    if (message.Values != null && message.Values.Count > 0)
+                        densityValue = message.Values.First().relativeDensity;
+                    else
+                        densityValue = RelativeDensity.Zero;
                 else
                     densityValue = message.GetValueOfOre(_config.HeatMapOre);
-                var component = new ProspectorOverlayMapComponent(_clientApi, message.X, message.Z, message.Message, _colorTextures[(int)densityValue]);
+                var component = new ProspectorOverlayMapComponent(_clientApi, message.X, message.Z, message.GetMessage(), _colorTextures[(int)densityValue]);
                 _components.Add(component);
             }
         }
