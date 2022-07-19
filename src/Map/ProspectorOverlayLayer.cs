@@ -350,7 +350,6 @@ namespace ProspectorInfo.Map
             if (pos == null || groupId != GlobalConstants.InfoLogChatGroup || !_triggerwords.Any(triggerWord => message.StartsWith(triggerWord)))
                 return;
 
-            message = _cleanupRegex.Replace(message, string.Empty);
             var posX = pos.X / _chunksize;
             var posZ = pos.Z / _chunksize;
             _messages.RemoveAll(m => m.X == posX && m.Z == posZ);
@@ -370,7 +369,7 @@ namespace ProspectorInfo.Map
                     densityValue = RelativeDensity.Zero;
             else
                 densityValue = _messages.Last().GetValueOfOre(_config.HeatMapOre);
-            var newComponent = new ProspectorOverlayMapComponent(_clientApi, posX, posZ, message, _colorTextures[(int)densityValue]);
+            var newComponent = new ProspectorOverlayMapComponent(_clientApi, posX, posZ, _messages.Last().GetMessage(_cleanupRegex), _colorTextures[(int)densityValue]);
             _components.Add(newComponent);
 
             blocksSinceLastSuccessList.Clear();
@@ -412,7 +411,7 @@ namespace ProspectorInfo.Map
                         densityValue = RelativeDensity.Zero;
                 else
                     densityValue = message.GetValueOfOre(_config.HeatMapOre);
-                var component = new ProspectorOverlayMapComponent(_clientApi, message.X, message.Z, message.GetMessage(), _colorTextures[(int)densityValue]);
+                var component = new ProspectorOverlayMapComponent(_clientApi, message.X, message.Z, message.GetMessage(_cleanupRegex), _colorTextures[(int)densityValue]);
                 _components.Add(component);
             }
         }

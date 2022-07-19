@@ -60,7 +60,7 @@ namespace ProspectorInfo.Map
             }
         }
 
-        public string GetMessage()
+        public string GetMessage(System.Text.RegularExpressions.Regex cleanupRegex)
         {
             StringBuilder sb = new StringBuilder();
 
@@ -76,12 +76,14 @@ namespace ProspectorInfo.Map
                 {
                     if (elem.relativeDensity > RelativeDensity.Miniscule)
                     {
-                        sb.AppendLine(Lang.Get("propick-reading", Lang.Get(densityStrings[(int)elem.relativeDensity - 2]), "", Lang.Get(elem.name), elem.absoluteDensity.ToString("0.#")));
+                        string text = Lang.Get("propick-reading", Lang.Get(densityStrings[(int)elem.relativeDensity - 2]), "", Lang.Get("ore-" + elem.name), elem.absoluteDensity.ToString("0.#"));
+                        cleanupRegex.Replace(text, string.Empty);
+                        sb.AppendLine();
                     } else
                     {
                         if (traceCount > 0) 
                             sbTrace.Append(", ");
-                        sbTrace.Append(Lang.Get(elem.name));
+                        sbTrace.Append(Lang.Get("ore-" + elem.name));
                         traceCount++;
                     }
                 }
@@ -171,7 +173,7 @@ namespace ProspectorInfo.Map
         {
             foreach (var ore in Values)
             {
-                if (Lang.Get("ore-" + ore.name).ToLower() == oreName.ToLower())
+                if (Lang.Get("ore-" + ore.name).ToLower() == oreName.ToLower() || ore.name.ToLower() == oreName.ToLower())
                     return ore.relativeDensity;
             }
             return RelativeDensity.Zero;
