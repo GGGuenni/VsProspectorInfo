@@ -21,19 +21,16 @@ namespace ProspectorInfo.Map
     internal class ProspectorOverlayLayer : MapLayer
     {
         private const string Filename = ProspectorInfoModSystem.DATAFILE;
-        private readonly string[] _triggerwords;
-        private readonly ProspectorMessages _messages;
         private readonly int _chunksize;
-        private readonly ICoreClientAPI _clientApi;
-        private readonly List<MapComponent> _components = new List<MapComponent>();
+        static private List<MapComponent> _components = new List<MapComponent>();
         private readonly IWorldMapManager _worldMapManager;
-        private readonly Regex _cleanupRegex;
-        private readonly ModConfig _config;
-        private readonly LoadedTexture[] _colorTextures = new LoadedTexture[8];
+        static private Regex _cleanupRegex;
+        static private ModConfig _config;
+        static private LoadedTexture[] _colorTextures = new LoadedTexture[8];
         private bool _temporaryRenderOverride = false;
 
-        static private ICoreServerAPI _serverApi;
-        static private ProPickWorkSpace _proPickWorkSpace;
+        static private ICoreClientAPI _clientApi;
+        static private ProspectorMessages _prospectInfos;
 
         public override string Title => "ProspectorOverlay";
         public override EnumMapAppSide DataSide => EnumMapAppSide.Client;
@@ -44,8 +41,8 @@ namespace ProspectorInfo.Map
         {
             _worldMapManager = mapSink;
             _chunksize = api.World.BlockAccessor.ChunkSize;
-            _messages = api.LoadOrCreateDataFile<ProspectorMessages>(Filename);
-            _triggerwords = LangUtils.GetAllLanguageStringsOfKey("propick-reading-title").Select(x => x.Split().FirstOrDefault()).Where(x => !string.IsNullOrEmpty(x)).ToArray();
+            _prospectInfos = api.LoadOrCreateDataFile<ProspectorMessages>(Filename);
+            //_triggerwords = LangUtils.GetAllLanguageStringsOfKey("propick-reading-title").Select(x => x.Split().FirstOrDefault()).Where(x => !string.IsNullOrEmpty(x)).ToArray();
             _cleanupRegex = new Regex("<.*?>", RegexOptions.Compiled);
 
             var modSystem = this.api.ModLoader.GetModSystem<ProspectorInfoModSystem>();
@@ -54,7 +51,6 @@ namespace ProspectorInfo.Map
             if (api.Side == EnumAppSide.Client)
             {
                 _clientApi = (ICoreClientAPI)api;
-                _clientApi.Event.ChatMessage += OnChatMessage;
                 _clientApi.Event.AfterActiveSlotChanged += Event_AfterActiveSlotChanged;
                 _clientApi.Event.PlayerJoin += (p) =>
                 {
@@ -79,17 +75,6 @@ namespace ProspectorInfo.Map
                     _colorTextures[i]?.Dispose();
                     _colorTextures[i] = GenerateOverlayTexture((RelativeDensity)i);
                 }
-            }
-
-            if (api.Side == EnumAppSide.Server)
-            {
-                _serverApi = (ICoreServerAPI)api;
-                _proPickWorkSpace = ObjectCacheUtil.GetOrCreate(api, "propickworkspace", () =>
-                {
-                    ProPickWorkSpace ppws = new ProPickWorkSpace();
-                    ppws.OnLoaded(api);
-                    return ppws;
-                });
             }
         }
 
@@ -341,40 +326,6 @@ namespace ProspectorInfo.Map
         }
         #endregion
 
-        private void OnChatMessage(int groupId, string message, EnumChatType chattype, string data)
-        {
-            if (_clientApi?.World?.Player == null)
-                return;
-
-            var pos = _clientApi.World.Player.WorldData.CurrentGameMode == EnumGameMode.Creative ? blocksSinceLastSuccessList.LastOrDefault()?.Position : blocksSinceLastSuccessList.ElementAtOrDefault(blocksSinceLastSuccessList.Count - 2 - 1)?.Position;
-            if (pos == null || groupId != GlobalConstants.InfoLogChatGroup || !_triggerwords.Any(triggerWord => message.StartsWith(triggerWord)))
-                return;
-
-            var posX = pos.X / _chunksize;
-            var posZ = pos.Z / _chunksize;
-            _messages.RemoveAll(m => m.X == posX && m.Z == posZ);
-            _messages.Add(new ProspectInfo(pos, _chunksize, _serverApi, _proPickWorkSpace));
-            _clientApi.SaveDataFile(Filename, _messages);
-
-            _components.RemoveAll(component =>
-            {
-                var castComponent = component as ProspectorOverlayMapComponent;
-                return castComponent?.ChunkX == posX && castComponent.ChunkZ == posZ;
-            });
-            RelativeDensity densityValue;
-            if (_config.HeatMapOre == null)
-                if (_messages.Last().Values != null && _messages.Last().Values.Count > 0)
-                    densityValue = _messages.Last().Values.First().relativeDensity;
-                else
-                    densityValue = RelativeDensity.Zero;
-            else
-                densityValue = _messages.Last().GetValueOfOre(_config.HeatMapOre);
-            var newComponent = new ProspectorOverlayMapComponent(_clientApi, posX, posZ, _messages.Last().GetMessage(_cleanupRegex), _colorTextures[(int)densityValue]);
-            _components.Add(newComponent);
-
-            blocksSinceLastSuccessList.Clear();
-        }
-
         public override void OnMapOpenedClient()
         {
             if (!_worldMapManager.IsOpened)
@@ -401,7 +352,7 @@ namespace ProspectorInfo.Map
                 }
             }
 
-            foreach (var message in _messages)
+            foreach (var message in _prospectInfos)
             {
                 RelativeDensity densityValue;
                 if (_config.HeatMapOre == null)
@@ -443,7 +394,7 @@ namespace ProspectorInfo.Map
 
         // ReSharper disable once UnusedType.Local
         [HarmonyPatch(typeof(ItemProspectingPick), "ProbeBlockDensityMode")]
-        class PrintProbeResultsPatch
+        class ProbeBlockDensityModePatch
         {
             static void Postfix(IWorldAccessor world, Entity byEntity, ItemSlot itemslot, BlockSelection blockSel)
             {
@@ -451,6 +402,55 @@ namespace ProspectorInfo.Map
                     return;
 
                 blocksSinceLastSuccessList.Add(blockSel);
+            }
+        }
+
+        [HarmonyPatch(typeof(ItemProspectingPick), "PrintProbeResults")]
+        class PrintProbeResultsPatch
+        {
+            static void Postfix(IWorldAccessor world, IServerPlayer byPlayer, ItemSlot itemslot, BlockPos pos)
+            {
+                Console.WriteLine("In Postfix");
+                if (world.Side != EnumAppSide.Client)
+                    return;
+
+                ProPickWorkSpace _proPickWorkSpace = ObjectCacheUtil.GetOrCreate(world.Api, "propickworkspace", () =>
+                {
+                    ProPickWorkSpace ppws = new ProPickWorkSpace();
+                    ppws.OnLoaded(world.Api);
+                    return ppws;
+                });
+
+                int _chunkSize = world.BlockAccessor.ChunkSize;
+
+                if (_clientApi?.World?.Player == null)
+                    return;
+
+                var posX = pos.X / _chunkSize;
+                var posZ = pos.Z / _chunkSize;
+                _prospectInfos.RemoveAll(m => m.X == posX && m.Z == posZ);
+                _prospectInfos.Add(new ProspectInfo(pos, _chunkSize, world.Api as ICoreServerAPI, _proPickWorkSpace));
+                _clientApi.SaveDataFile(Filename, _prospectInfos);
+
+                _components.RemoveAll(component =>
+                {
+                    var castComponent = component as ProspectorOverlayMapComponent;
+                    return castComponent?.ChunkX == posX && castComponent.ChunkZ == posZ;
+                });
+
+                RelativeDensity densityValue;
+                if (_config.HeatMapOre == null)
+                    if (_prospectInfos.Last().Values != null && _prospectInfos.Last().Values.Count > 0)
+                        densityValue = _prospectInfos.Last().Values.First().relativeDensity;
+                    else
+                        densityValue = RelativeDensity.Zero;
+                else
+                    densityValue = _prospectInfos.Last().GetValueOfOre(_config.HeatMapOre);
+
+                var newComponent = new ProspectorOverlayMapComponent(_clientApi, posX, posZ, _prospectInfos.Last().GetMessage(_cleanupRegex), _colorTextures[(int)densityValue]);
+                _components.Add(newComponent);
+
+                blocksSinceLastSuccessList.Clear();
             }
         }
     }
